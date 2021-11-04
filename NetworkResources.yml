@@ -1,0 +1,166 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Network for Minecraft Spot Price Server via Docker / ECS
+Parameters:
+
+  YourIPv4:
+    Type: String
+    Description: (Optional - An empty value disables this feature)
+    Default: ''
+
+  YourIPv6:
+    Type: String
+    Description: (Optional - An empty value disables this feature)
+    Default: ''
+
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Optional Remote Access (SSH) Configuration
+        Parameters:
+        - YourIPv4
+        - YourIPv6
+
+    ParameterLabels:
+      YourIPv4:
+        default: "If you wish to access the instance via SSH and using IPv4, provide it."
+      YourIPv6:
+        default: "If you wish to access the instance via SSH and using IPv6, provide it."
+
+Conditions:
+  IPv4AddressProvided: !Not [ !Equals [ !Ref YourIPv4, '' ] ]
+  IPv6AddressProvided: !Not [ !Equals [ !Ref YourIPv6, '' ] ]
+
+
+Resources:
+
+  # ====================================================
+  # BASIC VPC
+  # ====================================================
+
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.100.0.0/26
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+      - 0
+      - !GetAZs
+        Ref: 'AWS::Region'
+      CidrBlock: !Select [ 0, !Cidr [ 10.100.0.0/26, 4, 4 ] ]
+      VpcId: !Ref Vpc
+
+  SubnetARoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetA
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Select
+      - 1
+      - !GetAZs
+        Ref: 'AWS::Region'
+      CidrBlock: !Select [ 1, !Cidr [ 10.100.0.0/26, 4, 4 ] ]
+      VpcId: !Ref Vpc
+
+  SubnetBRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetB
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties: {}
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref Vpc
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+
+  Route:
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTable
+
+  EfsSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-efs"
+      GroupDescription: !Sub "${AWS::StackName}-efs"
+      SecurityGroupIngress:
+      - FromPort: 2049
+        ToPort: 2049
+        IpProtocol: tcp
+        SourceSecurityGroupId: !Ref Ec2Sg
+      VpcId: !Ref Vpc
+
+  Ec2Sg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "${AWS::StackName}-ec2"
+      GroupDescription: !Sub "${AWS::StackName}-ec2"
+      SecurityGroupIngress:
+      - !If
+        - IPv4AddressProvided
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIp: !Sub "${YourIPv4}/32"
+        - !Ref 'AWS::NoValue'
+      - !If
+        - IPv6AddressProvided
+        - FromPort: 22
+          ToPort: 22
+          IpProtocol: tcp
+          CidrIpv6: !Sub "${YourIPv6}/128"
+        - !Ref 'AWS::NoValue'
+      - FromPort: 25565
+        ToPort: 25565
+        IpProtocol: tcp
+        CidrIp: 0.0.0.0/0
+      VpcId: !Ref Vpc
+
+Outputs:
+  Vpc:
+    Description: VPC ID for the minecraft servers
+    Value: !Ref Vpc
+    Export:
+      Name: Minecraft-Vpc
+  SubnetA:
+    Description: SubnetA for minecraft servers
+    Value: !Ref SubnetA
+    Export:
+      Name: Minecraft-SubnetA
+  SubnetB:
+    Description: SubnetB for minecraft servers
+    Value: !Ref SubnetB
+    Export:
+      Name: Minecraft-SubnetB
+  EfsSg:
+    Description: Security Group for EFS service
+    Value: !Ref EfsSg
+    Export:
+        Name: Minecraft-EfsSg
+  Ec2Sg:
+    Description: SecurityGroup for EC2 servers
+    Value: !Ref Ec2Sg
+    Export:
+        Name: EcsSg
